@@ -344,7 +344,7 @@ if __name__ == "__main__":
     # mask = generator.process_image("/Users/wang/code-project/marketing_material_files_and_information_processing_tools/sticker/SCR-20241128-mbke.jpeg", output_png_path, outline_width=20)
     
     # 2. 生成 PDF (多图层：白底、图案、切线)
-    input_path = "sticker/SCR-20251225-qmxf.jpeg"
+    input_path = "sticker/111.jpg"
     
     if os.path.exists(input_path):
         # 获取处理后的中间数据
