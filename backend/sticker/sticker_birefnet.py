@@ -1,3 +1,17 @@
+"""
+贴纸生成器 - BiRefNet 版本
+使用 BiRefNet 模型进行 AI 抠图
+
+⚠️ DEPRECATED: 此文件已弃用，请使用 sticker_generator.py 代替。
+使用示例: StickerGenerator(backend="birefnet")
+"""
+import warnings
+warnings.warn(
+    "sticker_birefnet.py 已弃用，请使用 sticker_generator.py 代替。"
+    "示例: from sticker.sticker_generator import StickerGenerator; StickerGenerator(backend='birefnet')",
+    DeprecationWarning,
+    stacklevel=2
+)
 import cv2
 import numpy as np
 from PIL import Image
@@ -8,8 +22,13 @@ from torchvision import transforms
 from transformers import AutoModelForImageSegmentation
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
-from reportlab.lib.colors import magenta, white
+from reportlab.lib.colors import magenta, white, cyan
 from datetime import datetime
+
+# 出血线距离裁切线的偏移量 (3mm)
+BLEED_MARGIN_MM = 3
+# 假设 72 DPI，1mm ≈ 2.83 像素
+PX_PER_MM = 72 / 25.4
 
 class StickerGenerator:
     def __init__(self):
@@ -92,11 +111,29 @@ class StickerGenerator:
         # 步骤 C: 硬化 (得到白边 Mask)
         _, outline_mask = cv2.threshold(blurred, 127, 255, cv2.THRESH_BINARY)
         
+        # 步骤 D: 计算出血线边界框 (裁切线 bounding box + 3mm)
+        contours, _ = cv2.findContours(outline_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            # 合并所有轮廓的 bounding box
+            all_points = np.vstack(contours)
+            x, y, bw, bh = cv2.boundingRect(all_points)
+            
+            # 出血线外扩 3mm (像素)
+            bleed_px = int(BLEED_MARGIN_MM * PX_PER_MM)
+            bleed_x = max(0, x - bleed_px)
+            bleed_y = max(0, y - bleed_px)
+            bleed_x2 = min(w, x + bw + bleed_px)
+            bleed_y2 = min(h, y + bh + bleed_px)
+            bleed_rect = (bleed_x, bleed_y, bleed_x2 - bleed_x, bleed_y2 - bleed_y)
+        else:
+            bleed_rect = (0, 0, w, h)
+        
         # 返回关键数据字典
         return {
-            "original_image_rgba": img_rgba, # 完整原图
-            "tight_mask": mask_np,          # [新增] 紧贴主体的 Mask (用于图像遮罩)
-            "outline_mask": outline_mask,   # 扩充后的 Mask (用于裁切线)
+            "original_image_rgba": img_rgba,  # 完整原图
+            "tight_mask": mask_np,            # 紧贴主体的 Mask
+            "outline_mask": outline_mask,     # 扩充后的 Mask (用于裁切线)
+            "bleed_rect": bleed_rect,         # 出血线边界框 (x, y, w, h)
             "width": w,
             "height": h
         }
@@ -137,48 +174,48 @@ class StickerGenerator:
     def generate_pdf(self, process_data, output_pdf_path):
         """
         生成分层 PDF: 
-        Layer 1: White Mask (矢量白底)
-        Layer 2: Artwork (原图)
-        Layer 3: CutLine (矢量刀线)
+        - 图像裁切到出血线范围 (矩形)
+        - Layer 1: Artwork (裁切后的主体图像)
+        - Layer 2: CutLine (矢量裁切线 - 洋红色)
+        - Layer 3: BleedLine (出血线矩形 - 青色)
         """
         img_rgba = process_data["original_image_rgba"]
-        tight_mask = process_data["tight_mask"] # [新增]
+        tight_mask = process_data["tight_mask"]
         outline_mask = process_data["outline_mask"]
-        w_px, h_px = process_data["width"], process_data["height"]
+        bleed_rect = process_data["bleed_rect"]  # (x, y, w, h)
+        orig_w, orig_h = process_data["width"], process_data["height"]
         
-        # 转换尺寸 (假设 72 DPI，1 px = 1 point)
-        c = canvas.Canvas(output_pdf_path, pagesize=(w_px, h_px))
+        # 裁切到出血线范围
+        bx, by, bw, bh = bleed_rect
         
-        # 1. 定义 OCG 层
+        # 裁切图像和 mask
+        cropped_img = img_rgba[by:by+bh, bx:bx+bw].copy()
+        cropped_tight_mask = tight_mask[by:by+bh, bx:bx+bw].copy()
+        cropped_outline_mask = outline_mask[by:by+bh, bx:bx+bw].copy()
         
-        # --- Layer 1: Image (主体图像 - Raster Masked) ---
-        # c.beginOCG("Artwork", on=1)
+        # PDF 页面尺寸为裁切后的尺寸
+        page_w, page_h = bw, bh
         
-        # 构造一个应用了 Tight Mask 的临时图像
-        # 这样 ReportLab 会自动处理 Alpha 通道，实现“沿边缘遮罩”
-        # 同时保留了主体内的原始像素
-        masked_img = img_rgba.copy()
-        masked_img[:, :, 3] = tight_mask # Apply Tight Mask
+        c = canvas.Canvas(output_pdf_path, pagesize=(page_w, page_h))
         
-        temp_img_path = "/tmp/temp_artwork.png"
+        # --- Layer 1: Artwork (裁切后的主体图像) ---
+        masked_img = cropped_img.copy()
+        masked_img[:, :, 3] = cropped_tight_mask
+        
+        temp_img_path = "/tmp/temp_artwork_cropped.png"
         cv2.imwrite(temp_img_path, cv2.cvtColor(masked_img, cv2.COLOR_RGBA2BGRA))
         
-        # 绘制 Masked Image
-        # mask='auto' 使用 PNG 自带的 Alpha 通道
-        c.drawImage(temp_img_path, 0, 0, width=w_px, height=h_px, mask='auto', preserveAspectRatio=True)
-        # c.endOCG()
+        c.drawImage(temp_img_path, 0, 0, width=page_w, height=page_h, mask='auto', preserveAspectRatio=True)
         
-        # --- Layer 2: Removed (Vector White Mask) ---
-        # 用户要求: "白色遮罩不用使用矢量图层"
-        # 由于 Layer 1 已经是 Masked 的，背景自然是透出的(或者白色纸张)，不需要额外的矢量遮罩层。
+        # --- Layer 2: CutLine (矢量裁切线 - 洋红色) ---
+        self._draw_contours_as_path(c, cropped_outline_mask, fill=False, stroke=True, 
+                                     color=magenta, stroke_width=0.5*mm, h_page=page_h, smooth_factor=0.0005)
         
-        # --- Layer 3: CutLine (矢量裁切线 - 顶层) ---
-        # c.beginOCG("CutLine", on=1)
-        # 描边通常用洋红色 (Magenta)
-        # 描边通常用洋红色 (Magenta)
-        # [调整] 使用 0.0005 保留更多细节，依靠后续的 Bezier 算法进行平滑
-        self._draw_contours_as_path(c, outline_mask, fill=False, stroke=True, color=magenta, stroke_width=0.5*mm, h_page=h_px, smooth_factor=0.0005)
-        # c.endOCG()
+        # --- Layer 3: BleedLine (出血线矩形 - 青色) ---
+        # 出血线是整个页面的边界矩形
+        c.setStrokeColor(cyan)
+        c.setLineWidth(0.3*mm)
+        c.rect(0, 0, page_w, page_h, stroke=1, fill=0)
         
         c.showPage()
         c.save()
@@ -187,7 +224,8 @@ class StickerGenerator:
         if os.path.exists(temp_img_path):
             os.remove(temp_img_path)
             
-        print(f"分层 PDF 已生成: {output_pdf_path}")
+        print(f"分层 PDF 已生成 (裁切至出血线): {output_pdf_path}")
+        print(f"  原始尺寸: {orig_w}x{orig_h} -> 裁切后: {page_w}x{page_h}")
 
     def _draw_contours_as_path(self, c, mask, fill=False, stroke=True, color=None, stroke_width=1, h_page=0, smooth_factor=0.0005):
         """
