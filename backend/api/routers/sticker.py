@@ -39,10 +39,8 @@ def get_birefnet_generator():
     """延迟加载 BiRefNet 生成器"""
     global _birefnet_generator
     if _birefnet_generator is None:
-        import sys
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        from sticker import sticker_birefnet
-        _birefnet_generator = sticker_birefnet.StickerGenerator()
+        from sticker.sticker_generator import StickerGenerator
+        _birefnet_generator = StickerGenerator(backend="birefnet")
     return _birefnet_generator
 
 
@@ -50,10 +48,8 @@ def get_rembg_generator():
     """延迟加载 rembg 生成器"""
     global _rembg_generator
     if _rembg_generator is None:
-        import sys
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        from sticker import sticker_rembg
-        _rembg_generator = sticker_rembg.StickerGenerator()
+        from sticker.sticker_generator import StickerGenerator
+        _rembg_generator = StickerGenerator(backend="rembg")
     return _rembg_generator
 
 
@@ -106,7 +102,7 @@ async def get_original_preview(file_id: str):
     raise HTTPException(status_code=404, detail="文件未找到")
 
 
-def process_sticker_task(task_id: str, file_id: str, outline_width: int, model_type: AIModelType):
+def process_sticker_task(task_id: str, file_id: str, outline_width_mm: float, model_type: AIModelType):
     """后台任务: 处理贴纸生成"""
     try:
         task_store[task_id]["status"] = "processing"
@@ -136,7 +132,7 @@ def process_sticker_task(task_id: str, file_id: str, outline_width: int, model_t
         task_store[task_id]["progress"] = 30
         
         # 生成贴纸数据
-        process_data = generator.process_image_to_data(input_path, outline_width=outline_width)
+        process_data = generator.process_image_to_data(input_path, outline_width_mm=outline_width_mm)
         task_store[task_id]["progress"] = 60
         
         # 创建输出目录
@@ -156,7 +152,7 @@ def process_sticker_task(task_id: str, file_id: str, outline_width: int, model_t
         
         # 生成预览 PNG
         preview_path = os.path.join(task_output_dir, f"preview_{timestamp}.png")
-        generator.process_image(input_path, preview_path, outline_width=outline_width)
+        generator.process_image(input_path, preview_path, outline_width_mm=outline_width_mm)
         
         # 更新任务状态
         task_store[task_id]["status"] = "completed"
@@ -205,7 +201,7 @@ async def generate_sticker(request: StickerGenerateRequest, background_tasks: Ba
         process_sticker_task,
         task_id,
         request.file_id,
-        request.outline_width,
+        request.outline_width_mm,
         request.model_type
     )
     

@@ -6,19 +6,19 @@
     <div class="param-group">
       <label class="param-label">
         白边宽度
-        <span class="param-value">{{ outlineWidth }}px</span>
+        <span class="param-value">{{ outlineWidthMm }}mm</span>
       </label>
       <input 
         type="range" 
-        v-model.number="outlineWidth"
-        min="5" 
-        max="50" 
-        step="1"
+        v-model.number="outlineWidthMm"
+        min="1" 
+        max="10" 
+        step="0.5"
         class="param-slider"
       />
       <div class="slider-labels">
-        <span>5px</span>
-        <span>50px</span>
+        <span>1mm</span>
+        <span>10mm</span>
       </div>
     </div>
     
@@ -31,7 +31,6 @@
           :class="{ active: modelType === 'birefnet' }"
           @click="modelType = 'birefnet'"
         >
-          <span class="model-name">BiRefNet</span>
           <span class="model-desc">高精度</span>
         </button>
         <button 
@@ -39,7 +38,6 @@
           :class="{ active: modelType === 'rembg' }"
           @click="modelType = 'rembg'"
         >
-          <span class="model-name">Rembg</span>
           <span class="model-desc">更快速</span>
         </button>
       </div>
@@ -73,17 +71,17 @@ const props = defineProps({
 
 const emit = defineEmits(['generate'])
 
-const outlineWidth = ref(15)
+const outlineWidthMm = ref(5)
 const modelType = ref('birefnet')
 
 // 监听参数变化，通知父组件
-watch([outlineWidth, modelType], () => {
+watch([outlineWidthMm, modelType], () => {
   // 可以在这里触发预览更新
 })
 
 function onGenerate() {
   emit('generate', {
-    outline_width: outlineWidth.value,
+    outline_width_mm: outlineWidthMm.value,
     model_type: modelType.value
   })
 }

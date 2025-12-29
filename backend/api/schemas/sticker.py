@@ -15,7 +15,7 @@ class AIModelType(str, Enum):
 class StickerGenerateRequest(BaseModel):
     """贴纸生成请求参数"""
     file_id: str = Field(..., description="上传文件的临时 ID")
-    outline_width: int = Field(default=15, ge=5, le=50, description="白边宽度 (5-50 像素)")
+    outline_width_mm: float = Field(default=5.0, ge=1.0, le=10.0, description="白边宽度 (1-10 毫米)")
     model_type: AIModelType = Field(default=AIModelType.BIREFNET, description="AI 抠图模型类型")
 
 

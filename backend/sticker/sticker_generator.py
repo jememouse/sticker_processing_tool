@@ -19,6 +19,10 @@ BLEED_MARGIN_MM = 3
 # 假设 72 DPI，1mm ≈ 2.83 像素
 PX_PER_MM = 72 / 25.4
 
+# 默认输出目录 (项目内)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEFAULT_OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "outputs", "sticker")
+
 # Backend 类型定义
 BackendType = Literal["rembg", "birefnet"]
 
@@ -29,18 +33,30 @@ class StickerGenerator:
     
     Args:
         backend: 抠图引擎，可选 "rembg"（默认）或 "birefnet"
+        output_dir: 输出目录，可选:
+            - None: 使用环境变量 STICKER_OUTPUT_DIR，若未设置则使用项目内 outputs/sticker/
+            - 字符串路径: 使用指定的自定义目录
     """
     
-    def __init__(self, backend: BackendType = "rembg"):
+    def __init__(self, backend: BackendType = "rembg", output_dir: str = None):
         self.backend = backend
         self._model = None  # BiRefNet 模型（延迟加载）
         self._device = None  # BiRefNet 设备
         self._transform = None  # BiRefNet 预处理
         
+        # 输出目录配置: 优先级 参数 > 环境变量 > 默认值
+        if output_dir:
+            self.output_dir = output_dir
+        else:
+            self.output_dir = os.environ.get("STICKER_OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
+        
+        # 确保输出目录存在
+        os.makedirs(self.output_dir, exist_ok=True)
+        
         if backend == "birefnet":
             self._init_birefnet()
         elif backend == "rembg":
-            print("初始化 Rembg 贴纸生成器...")
+            print(f"初始化 Rembg 贴纸生成器... 输出目录: {self.output_dir}")
         else:
             raise ValueError(f"不支持的 backend: {backend}，可选: 'rembg', 'birefnet'")
     
@@ -147,33 +163,62 @@ class StickerGenerator:
         else:
             return self._remove_background_rembg(input_image_path)
     
+    # ========== 输出路径管理 ==========
+    
+    def get_output_path(self, input_path: str, suffix: str = "", ext: str = "pdf") -> str:
+        """
+        根据输入文件名生成输出路径
+        
+        Args:
+            input_path: 输入文件路径
+            suffix: 文件名后缀（如 '_preview'）
+            ext: 文件扩展名（默认 'pdf'）
+            
+        Returns:
+            完整的输出文件路径
+        """
+        input_name = os.path.splitext(os.path.basename(input_path))[0]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{input_name}_{self.backend}{suffix}_{timestamp}.{ext}"
+        return os.path.join(self.output_dir, filename)
+    
+    def set_output_dir(self, output_dir: str):
+        """动态切换输出目录"""
+        self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
+        print(f"输出目录已切换到: {self.output_dir}")
+    
     # ========== 共用处理逻辑 ==========
     
-    def process_image_to_data(self, input_image_path: str, outline_width: int = 15) -> dict:
+    def process_image_to_data(self, input_image_path: str, outline_width_mm: float = 5.0) -> dict:
         """
         核心处理：抠图 + 生成轮廓、出血线数据
         
         Args:
             input_image_path: 输入图片路径
-            outline_width: 轮廓扩展宽度（像素）
+            outline_width_mm: 白边宽度（毫米，默认 5mm）
             
         Returns:
             包含处理结果的字典
         """
         print(f"正在处理图片 ({self.backend}): {input_image_path}")
+        print(f"  白边宽度: {outline_width_mm}mm")
         
         # 1. 抠图
         img_rgba, tight_mask = self._remove_background(input_image_path)
         h, w = img_rgba.shape[:2]
         
+        # 将 mm 转换为像素 (基于 72 DPI)
+        outline_width_px = int(outline_width_mm * PX_PER_MM)
+        
         # 2. 生成平滑轮廓 Mask
         # 步骤 A: 扩展
-        kernel_size = outline_width * 2 + 1
+        kernel_size = outline_width_px * 2 + 1
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
         dilated = cv2.dilate(tight_mask, kernel, iterations=1)
         
         # 步骤 B: 平滑
-        blur_radius = outline_width
+        blur_radius = outline_width_px
         if blur_radius % 2 == 0:
             blur_radius += 1
         blurred = cv2.GaussianBlur(dilated, (blur_radius, blur_radius), 0)
@@ -206,12 +251,12 @@ class StickerGenerator:
         }
     
     def process_image(self, input_image_path: str, output_path: str, 
-                      outline_width: int = 15, outline_color: tuple = (255, 255, 255),
+                      outline_width_mm: float = 5.0, outline_color: tuple = (255, 255, 255),
                       shadow_opacity: float = 0.3) -> np.ndarray:
         """
         生成带阴影和白边的 PNG 图片（兼容旧接口）
         """
-        data = self.process_image_to_data(input_image_path, outline_width)
+        data = self.process_image_to_data(input_image_path, outline_width_mm)
         img_rgba = data["original_image_rgba"]
         tight_mask = data["tight_mask"]
         outline_mask = data["outline_mask"]
@@ -394,27 +439,20 @@ if __name__ == "__main__":
                         help="抠图引擎 (默认: rembg)")
     parser.add_argument("--input", type=str, default="sticker/111.jpg",
                         help="输入图片路径")
-    parser.add_argument("--outline-width", type=int, default=20,
-                        help="轮廓宽度 (默认: 20)")
+    parser.add_argument("--outline-width-mm", type=float, default=5.0,
+                        help="白边宽度，单位毫米 (默认: 5mm)")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="输出目录 (默认: 项目内 outputs/sticker/ 或环境变量 STICKER_OUTPUT_DIR)")
     args = parser.parse_args()
     
-    generator = StickerGenerator(backend=args.backend)
-    
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    output_dir = os.path.join(base_dir, "Outfile")
-    
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-        print(f"创建输出目录: {output_dir}")
+    generator = StickerGenerator(backend=args.backend, output_dir=args.output_dir)
     
     input_path = args.input
     
     if os.path.exists(input_path):
-        process_data = generator.process_image_to_data(input_path, outline_width=args.outline_width)
+        process_data = generator.process_image_to_data(input_path, outline_width_mm=args.outline_width_mm)
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        input_name = os.path.splitext(os.path.basename(input_path))[0]
-        output_pdf_path = os.path.join(output_dir, f"{input_name}_sticker_{args.backend}_{timestamp}.pdf")
+        output_pdf_path = generator.get_output_path(input_path)
         generator.generate_pdf(process_data, output_pdf_path)
         
         print("Done!")
