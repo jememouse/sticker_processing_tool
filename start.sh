@@ -10,10 +10,19 @@ echo ""
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# 检查并安装前端依赖
+if [ ! -d "$SCRIPT_DIR/frontend/node_modules" ]; then
+    echo "📦 检测到未安装前端依赖，正在安装..."
+    cd "$SCRIPT_DIR/frontend"
+    npm install
+    cd "$SCRIPT_DIR"
+fi
+
 # 启动后端 (端口 8080)
 echo "📡 启动后端 API 服务 (端口 8080)..."
 cd "$SCRIPT_DIR/backend"
-uv run uvicorn api.server:app --host 0.0.0.0 --port 8080 &
+# 使用 main.py 启动，它会调用 uvicorn
+uv run main.py &
 BACKEND_PID=$!
 
 # 等待后端启动
